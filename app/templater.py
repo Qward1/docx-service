@@ -146,10 +146,10 @@ def rewrite_recipient_paragraph(paragraph: ET.Element, recipient_block: str) -> 
         paragraph.append(build_text_run(run_props, ""))
         return
 
-    paragraph.append(build_text_run(run_props, lines[0]))
-    for line in lines[1:]:
-        paragraph.append(build_control_run(run_props, "br"))
-        paragraph.append(build_text_run(run_props, line))
+    paragraph.append(build_control_run(run_props, "br", {"type": "column"}))
+    paragraph.append(build_text_run(run_props, f"{lines[0]} "))
+    if len(lines) > 1:
+        paragraph.append(build_text_run(run_props, lines[1]))
 
 
 def rewrite_subject_title_paragraph(paragraph: ET.Element, subject_title: str) -> None:
@@ -198,15 +198,7 @@ def replace_signature_department(root: ET.Element, data: LetterData) -> None:
                 next_paragraph = paragraphs[index + 1]
                 next_text = paragraph_text(next_paragraph)
                 if next_text == "и национальных проектовТ.С. Митюков":
-                    rewrite_paragraph(
-                        paragraph,
-                        "\n".join(
-                            part
-                            for part in [signature_line1, f"{signature_line2}\t{data.signer_name}"]
-                            if part
-                        ),
-                    )
-                    rewrite_paragraph(next_paragraph, "")
+                    rewrite_paragraph(next_paragraph, f"{signature_line2}\t{data.signer_name}")
 
 
 def build_signature_department_lines(department: str) -> tuple[str, str]:

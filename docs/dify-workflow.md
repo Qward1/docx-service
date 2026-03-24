@@ -120,6 +120,9 @@ def main(body: str, status_code: int) -> dict:
 - `reference_caption`
 - `salutation`
 - `body_text`
+- `signer_title`
+- `signer_department`
+- `signer_name`
 
 Входы:
 
@@ -185,6 +188,9 @@ def main(
             forwarding_parsed.get("salutation"),
             "Уважаемый заявитель!",
         ),
+        "signer_title": "Директор",
+        "signer_department": "Департамент бюджетного планирования, государственных программ и национальных проектов",
+        "signer_name": "Т.С. Митюков",
         "body_text": pick(
             appeal_parsed.get("body_text"),
             forwarding_parsed.get("body_text"),
@@ -300,6 +306,9 @@ def main(llm_output, parsed: dict, original_text: str) -> dict:
         "subject_title": data.get("subject_title") or parsed.get("subject_title", "") or "О рассмотрении обращения гражданина",
         "reference_caption": data.get("reference_caption") or parsed.get("reference_caption", "") or "На обращение гражданина",
         "salutation": data.get("salutation") or parsed.get("salutation", "") or "Уважаемый заявитель!",
+        "signer_title": data.get("signer_title") or parsed.get("signer_title", "") or "Директор",
+        "signer_department": data.get("signer_department") or parsed.get("signer_department", "") or "Департамент бюджетного планирования, государственных программ и национальных проектов",
+        "signer_name": data.get("signer_name") or parsed.get("signer_name", "") or "Т.С. Митюков",
         "body_text": data.get("body_text") or parsed.get("body_text", ""),
     }
 ```
@@ -312,6 +321,9 @@ def main(llm_output, parsed: dict, original_text: str) -> dict:
 - `subject_title` -> `String`
 - `reference_caption` -> `String`
 - `salutation` -> `String`
+- `signer_title` -> `String`
+- `signer_department` -> `String`
+- `signer_name` -> `String`
 - `body_text` -> `String`
 
 ## 10. HTTP Request -> render_docx
@@ -334,6 +346,9 @@ JSON body:
   "subject_title": "{{normalize_json.subject_title}}",
   "reference_caption": "{{normalize_json.reference_caption}}",
   "salutation": "{{normalize_json.salutation}}",
+  "signer_title": "{{normalize_json.signer_title}}",
+  "signer_department": "{{normalize_json.signer_department}}",
+  "signer_name": "{{normalize_json.signer_name}}",
   "body_text": "{{normalize_json.body_text}}"
 }
 ```

@@ -95,7 +95,10 @@ docker compose down
   "reference_line": "от 9 января 2025 г. № П48-5533-1",
   "reference_caption": "На обращение гражданина от 9 января 2025 г. № П48-5533-1",
   "salutation": "Уважаемый Иван Иванович!",
-  "body_text": "Первый абзац ответа.\n\nВторой абзац ответа."
+  "body_text": "Первый абзац ответа.\n\nВторой абзац ответа.",
+  "signer_title": "Директор",
+  "signer_department": "Департамент бюджетного планирования, государственных программ и национальных проектов",
+  "signer_name": "Т.С. Митюков"
 }
 ```
 
@@ -114,6 +117,8 @@ docker compose down
 - `reference_caption`
 - `salutation`
 - `body_text`
+- `signer_title`
+- `signer_department`
 - `signer_name`
 - `executor_name`
 - `executor_phone`
@@ -164,7 +169,7 @@ curl -X POST "http://127.0.0.1:8000/extract" \
 5. `Code` для парсинга JSON второго ответа
 6. `Code` для объединения реквизитов из двух документов
 7. `Knowledge Retrieval` по стилевому канону и Указу № 309
-8. `LLM` для генерации текста ответа и уточнения `recipient_block`, `reference_caption`, `salutation`
+8. `LLM` для генерации текста ответа и уточнения `recipient_block`, `reference_caption`, `salutation`, `signer_title`, `signer_department`, `signer_name`
 9. `Code` для нормализации JSON после LLM
 10. `HTTP Request` на `/generate`
 11. `Answer` с возвратом `docx`

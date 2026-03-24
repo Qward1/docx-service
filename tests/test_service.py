@@ -129,12 +129,15 @@ class GenerateEndpointTests(unittest.TestCase):
 
         with urllib.request.urlopen(request, timeout=30) as response:
             content_type = response.headers.get_content_type()
+            content_disposition = response.headers.get("Content-Disposition", "")
             document = response.read()
 
         self.assertEqual(
             content_type,
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
+        self.assertIn("filename*=UTF-8''", content_disposition)
+        self.assertIn("%D0%9E%D1%82%D0%B2%D0%B5%D1%82_%D0%98%D0%B2%D0%B0%D0%BD%D0%BE%D0%B2_%D0%98.%D0%98.docx", content_disposition)
         xml = extract_document_xml(document)
         self.assertIn("Иванов И.И.", xml)
         self.assertIn("Уважаемый Иван Иванович!", xml)
@@ -143,6 +146,62 @@ class GenerateEndpointTests(unittest.TestCase):
         self.assertIn("На обращение гражданина от 9 января 2025 г. № П48-5533-1", xml)
         self.assertIn("МИНИСТЕРСТВО ЭКОНОМИЧЕСКОГО РАЗВИТИЯ", xml)
         self.assertNotIn("FF0000", xml)
+
+    def test_generate_splits_single_body_text_into_multiple_paragraphs(self) -> None:
+        payload = {
+            "text": (
+                "Заявитель: Рулёв Никита Сергеевич\n"
+                "Тема: О представлении информации об экономическом развитии государства.\n"
+                "Просим предоставить разъяснения."
+            ),
+            "body_text": (
+                "Минэкономразвития России рассмотрело Ваше обращение и в части своей компетенции сообщает. "
+                "В соответствии с Указом Президента Российской Федерации от 7 мая 2024 г. № 309 утверждены национальные цели развития. "
+                "Правительством Российской Федерации утвержден Единый план по достижению национальных целей. "
+                "Учитывая изложенное, сообщаем, что работа продолжается."
+            ),
+        }
+        request = urllib.request.Request(
+            url=f"http://127.0.0.1:{self.http_server.port}/generate",
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+
+        with urllib.request.urlopen(request, timeout=30) as response:
+            document = response.read()
+
+        xml = extract_document_xml(document)
+        self.assertIn("Минэкономразвития России рассмотрело Ваше обращение и в части своей компетенции сообщает.", xml)
+        self.assertIn("В соответствии с Указом Президента Российской Федерации от 7 мая 2024 г. № 309 утверждены национальные цели развития.", xml)
+        self.assertIn("Правительством Российской Федерации утвержден Единый план по достижению национальных целей.", xml)
+        self.assertIn("Учитывая изложенное, сообщаем, что работа продолжается.", xml)
+
+    def test_generate_applies_custom_signature_fields(self) -> None:
+        payload = {
+            "text": (
+                "Заявитель: Иванов Иван Иванович\n"
+                "Тема: О предоставлении информации.\n"
+                "Просим дать ответ."
+            ),
+            "signer_title": "Заместитель директора",
+            "signer_department": "Департамент бюджетного планирования, государственных программ и национальных проектов",
+            "signer_name": "А.А. Петров",
+        }
+        request = urllib.request.Request(
+            url=f"http://127.0.0.1:{self.http_server.port}/generate",
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+
+        with urllib.request.urlopen(request, timeout=30) as response:
+            document = response.read()
+
+        xml = extract_document_xml(document)
+        self.assertIn("Заместитель директора Департамента бюджетного планирования, государственных программ", xml)
+        self.assertIn("и национальных проектов", xml)
+        self.assertIn("А.А. Петров", xml)
 
     def test_generate_from_pdf_extracts_text(self) -> None:
         pdf_text = (

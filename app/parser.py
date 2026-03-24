@@ -10,6 +10,7 @@ from .models import (
     DEFAULT_REFERENCE_CAPTION,
     DEFAULT_SALUTATION,
     DEFAULT_SIGNER_NAME,
+    DEFAULT_SIGNER_TITLE,
     DEFAULT_SOURCE_LINE_1,
     DEFAULT_SOURCE_LINE_2,
     DEFAULT_SUBJECT_TITLE,
@@ -49,6 +50,17 @@ META_LINE_PATTERNS = (
     "доб.",
 )
 EMAIL_RE = re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b")
+BODY_PARAGRAPH_MARKERS = (
+    "Минэкономразвития России",
+    "В соответствии",
+    "Правительством",
+    "В свою очередь",
+    "Так,",
+    "Также",
+    "На достижение",
+    "Одновременно с этим",
+    "Учитывая изложенное",
+)
 
 
 def parse_letter_data(text: str, overrides: LetterOverrides) -> LetterData:
@@ -68,6 +80,8 @@ def parse_letter_data(text: str, overrides: LetterOverrides) -> LetterData:
     recipient_block = overrides.recipient_block or build_recipient_block(applicant_display, applicant_email)
     salutation = overrides.salutation or build_salutation(full_applicant_name, applicant_display)
 
+    signer_title = overrides.signer_title or DEFAULT_SIGNER_TITLE
+    signer_department = overrides.signer_department or overrides.executor_department or DEFAULT_EXECUTOR_DEPARTMENT
     executor_department = overrides.executor_department or DEFAULT_EXECUTOR_DEPARTMENT
     dept_line1, dept_line2 = split_text_to_two_lines(executor_department, max_line_length=38)
 
@@ -82,6 +96,8 @@ def parse_letter_data(text: str, overrides: LetterOverrides) -> LetterData:
         reference_caption=reference_caption,
         salutation=salutation,
         body_paragraphs=body_paragraphs,
+        signer_title=signer_title,
+        signer_department=signer_department,
         signer_name=overrides.signer_name or DEFAULT_SIGNER_NAME,
         executor_name=overrides.executor_name or DEFAULT_EXECUTOR_NAME,
         executor_phone=overrides.executor_phone or DEFAULT_EXECUTOR_PHONE,
@@ -349,8 +365,35 @@ def resolve_body_paragraphs(
 
 
 def split_into_paragraphs(text: str) -> list[str]:
-    blocks = [normalize_paragraph(block) for block in re.split(r"\n\s*\n", text)]
-    return [block for block in blocks if block]
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        return []
+
+    blocks = [normalize_paragraph(block) for block in re.split(r"\n\s*\n+", normalized)]
+    blocks = [block for block in blocks if block]
+    if len(blocks) > 1:
+        return blocks
+
+    lines = [normalize_paragraph(line) for line in normalized.splitlines()]
+    lines = [line for line in lines if line]
+    if len(lines) > 1:
+        return lines
+
+    marked = normalized
+    for marker in BODY_PARAGRAPH_MARKERS:
+        marked = re.sub(rf"(?<=[.!?])\s+(?={re.escape(marker)})", "\n\n", marked)
+
+    blocks = [normalize_paragraph(block) for block in re.split(r"\n\s*\n+", marked)]
+    blocks = [block for block in blocks if block]
+    if len(blocks) > 1:
+        return blocks
+
+    sentences = [normalize_paragraph(chunk) for chunk in re.split(r"(?<=[.!?])\s+", normalized)]
+    sentences = [sentence for sentence in sentences if sentence]
+    if len(sentences) > 1:
+        return sentences
+
+    return [normalize_paragraph(normalized)]
 
 
 def normalize_paragraph(text: str) -> str:

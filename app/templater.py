@@ -38,7 +38,7 @@ def render_docx(template_path: Path, data: LetterData) -> bytes:
     )
     replace_signature_department(root, data)
     replace_body_paragraphs(root, data.body_paragraphs)
-    tighten_trailing_layout(root)
+    tighten_trailing_layout(root, data)
     turn_red_text_black(root)
 
     archive_map[DOCUMENT_XML_PATH] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
@@ -185,10 +185,10 @@ def rewrite_reference_caption_paragraph(paragraph: ET.Element, reference_caption
 
 def replace_signature_department(root: ET.Element, data: LetterData) -> None:
     paragraphs = root.findall(".//w:p", NS)
-    department = " ".join(
-        part for part in [data.executor_department_line1, data.executor_department_line2] if part
-    ).strip()
-    signature_line1, signature_line2 = build_signature_department_lines(department)
+    signature_line1, signature_line2 = build_signature_department_lines(
+        data.signer_title,
+        data.signer_department,
+    )
 
     for index, paragraph in enumerate(paragraphs):
         text = paragraph_text(paragraph)
@@ -201,18 +201,19 @@ def replace_signature_department(root: ET.Element, data: LetterData) -> None:
                     rewrite_paragraph(next_paragraph, f"{signature_line2}\t{data.signer_name}")
 
 
-def build_signature_department_lines(department: str) -> tuple[str, str]:
+def build_signature_department_lines(title: str, department: str) -> tuple[str, str]:
+    normalized_title = " ".join(title.split()) or "Директор"
     normalized = " ".join(department.split())
     if not normalized:
-        return "Директор Департамента", ""
+        return normalized_title, ""
 
     signature_department = to_signature_department_case(normalized)
     if signature_department.endswith(" и национальных проектов"):
         first_part = signature_department[: -len(" и национальных проектов")].rstrip()
         first_part = first_part.replace(", государственных программ", ",\nгосударственных программ", 1)
-        return f"Директор {first_part}", "и национальных проектов"
+        return f"{normalized_title} {first_part}", "и национальных проектов"
 
-    return f"Директор {signature_department}", ""
+    return f"{normalized_title} {signature_department}", ""
 
 
 def to_signature_department_case(text: str) -> str:
@@ -228,13 +229,14 @@ def to_signature_department_case(text: str) -> str:
     return text
 
 
-def tighten_trailing_layout(root: ET.Element) -> None:
+def tighten_trailing_layout(root: ET.Element, data: LetterData) -> None:
     body = root.find(".//w:body", NS)
     if body is None:
         return
 
     children = list(body)
-    signature_start = find_paragraph_index(children, lambda text: text.startswith("Директор "))
+    signature_prefix = " ".join((data.signer_title or "Директор").split())
+    signature_start = find_paragraph_index(children, lambda text: text.startswith(signature_prefix))
     executor_start = find_paragraph_index(children, lambda text: text.startswith("Исп. "))
     if signature_start is None or executor_start is None:
         return
@@ -243,7 +245,7 @@ def tighten_trailing_layout(root: ET.Element) -> None:
     if previous_content is not None:
         collapse_empty_paragraphs(body, children, previous_content + 1, signature_start, keep=1)
         children = list(body)
-        signature_start = find_paragraph_index(children, lambda text: text.startswith("Директор "))
+        signature_start = find_paragraph_index(children, lambda text: text.startswith(signature_prefix))
         executor_start = find_paragraph_index(children, lambda text: text.startswith("Исп. "))
         if signature_start is None or executor_start is None:
             return

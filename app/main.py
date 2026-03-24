@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import re
+from urllib.parse import quote
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -23,7 +25,7 @@ app = FastAPI(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATE_PATH = BASE_DIR / "shablon_minek.docx"
-OUTPUT_FILENAME = "response.docx"
+OUTPUT_FILENAME = "Ответ.docx"
 MAX_FILE_SIZE_MB = 20
 
 
@@ -67,7 +69,8 @@ async def generate_document(request: Request):
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Ошибка генерации DOCX: {exc}") from exc
 
-    headers = {"Content-Disposition": f'attachment; filename="{OUTPUT_FILENAME}"'}
+    output_filename = build_output_filename(letter_data)
+    headers = {"Content-Disposition": build_content_disposition(output_filename)}
     return StreamingResponse(
         io.BytesIO(document),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -159,6 +162,24 @@ def extract_filename_from_headers(request: Request) -> str:
     return filename
 
 
+def build_output_filename(data: LetterData) -> str:
+    applicant_part = sanitize_filename_part(data.applicant_display)
+    if not applicant_part:
+        return OUTPUT_FILENAME
+    return f"Ответ_{applicant_part}.docx"
+
+
+def sanitize_filename_part(value: str) -> str:
+    sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", value or "")
+    sanitized = re.sub(r"\s+", "_", sanitized).strip(" ._")
+    return sanitized[:80]
+
+
+def build_content_disposition(filename: str) -> str:
+    ascii_fallback = "response.docx"
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(filename)}"
+
+
 def serialize_letter_data(data: LetterData) -> dict[str, object]:
     return {
         "applicant_name": data.applicant_display,
@@ -172,6 +193,8 @@ def serialize_letter_data(data: LetterData) -> dict[str, object]:
         "salutation": data.salutation,
         "body_text": "\n\n".join(data.body_paragraphs),
         "body_paragraphs": data.body_paragraphs,
+        "signer_title": data.signer_title,
+        "signer_department": data.signer_department,
         "signer_name": data.signer_name,
         "executor_name": data.executor_name,
         "executor_phone": data.executor_phone,

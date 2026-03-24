@@ -162,10 +162,14 @@ def extract_filename_from_headers(request: Request) -> str:
 def serialize_letter_data(data: LetterData) -> dict[str, object]:
     return {
         "applicant_name": data.applicant_display,
+        "applicant_email": data.applicant_email,
+        "recipient_block": data.recipient_block,
         "subject_title": data.subject_title,
         "source_line1": data.source_line1,
         "source_line2": data.source_line2,
         "reference_line": data.reference_line,
+        "reference_caption": data.reference_caption,
+        "salutation": data.salutation,
         "body_text": "\n\n".join(data.body_paragraphs),
         "body_paragraphs": data.body_paragraphs,
         "signer_name": data.signer_name,

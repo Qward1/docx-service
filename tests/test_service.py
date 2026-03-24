@@ -137,9 +137,11 @@ class GenerateEndpointTests(unittest.TestCase):
         )
         xml = extract_document_xml(document)
         self.assertIn("Иванов И.И.", xml)
+        self.assertIn("Уважаемый Иван Иванович!", xml)
         self.assertIn("Первый абзац ответа.", xml)
         self.assertIn("Второй абзац ответа.", xml)
-        self.assertIn("от 9 января 2025 г. № П48-5533-1", xml)
+        self.assertIn("На обращение гражданина от 9 января 2025 г. № П48-5533-1", xml)
+        self.assertIn("МИНИСТЕРСТВО ЭКОНОМИЧЕСКОГО РАЗВИТИЯ", xml)
         self.assertNotIn("FF0000", xml)
 
     def test_generate_from_pdf_extracts_text(self) -> None:
@@ -167,9 +169,9 @@ class GenerateEndpointTests(unittest.TestCase):
 
         xml = extract_document_xml(document)
         self.assertIn("Петров П.П.", xml)
-        self.assertIn("Письмо Аппарата Правительства", xml)
-        self.assertIn("Российской Федерации", xml)
-        self.assertIn("от 9 января 2025 г. № П48-5533-1", xml)
+        self.assertIn("Уважаемый Петр Петрович!", xml)
+        self.assertIn("На обращение гражданина от 9 января 2025 г. № П48-5533-1", xml)
+        self.assertIn("МИНИСТЕРСТВО ЭКОНОМИЧЕСКОГО РАЗВИТИЯ", xml)
 
     def test_extract_from_raw_pdf_returns_text_and_fields(self) -> None:
         pdf_text = (

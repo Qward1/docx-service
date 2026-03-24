@@ -1,188 +1,348 @@
-# Dify Workflow Для PDF -> LLM -> DOCX
+# Dify Workflow Для 2 PDF -> Knowledge -> LLM -> DOCX
 
-Рекомендуемый вариант для Dify: использовать `Chatflow`, а не обычный `Workflow`, если итоговый `docx` нужно сразу отдавать пользователю в чате.
+Актуальная схема рассчитана на два входных PDF:
 
-## Рекомендуемая схема узлов
+- `forwarding_pdf` — сопроводительное или пересылочное письмо;
+- `appeal_pdf` — само обращение гражданина.
+
+Итоговый `docx` теперь собирается по реальному образцу ответа Минэкономразвития России. В `Dify` нужно готовить содержательные поля для этого шаблона, а не старую условную "шапку".
+
+## Схема Узлов
 
 1. `Start`
-2. `HTTP Request` (`extract_pdf`)
-3. `LLM` (`draft_response`)
-4. `Code` (`normalize_json`)
-5. `HTTP Request` (`render_docx`)
-6. `Answer`
+2. `HTTP Request` -> `extract_forwarding`
+3. `Code` -> `parse_forwarding_json`
+4. `HTTP Request` -> `extract_appeal`
+5. `Code` -> `parse_appeal_json`
+6. `Code` -> `merge_inputs`
+7. `Knowledge Retrieval` -> `retrieve_context`
+8. `LLM` -> `draft_response`
+9. `Code` -> `normalize_json`
+10. `HTTP Request` -> `render_docx`
+11. `Answer`
 
-## Что делает каждый узел
+## Что Загрузить В Knowledge Base
 
-### 1. `Start`
+Загрузите:
 
-Добавьте входную переменную:
+- [response-style-reference.md](/mnt/c/Users/Admin/Desktop/Опять работа/docx-service/docx-service/docs/dify-kb/response-style-reference.md)
+- [ukaz-309-economic-priorities.md](/mnt/c/Users/Admin/Desktop/Опять работа/docx-service/docx-service/docs/dify-kb/ukaz-309-economic-priorities.md)
 
-- `pdf` типа `Single File`
+## 1. Start
 
-Если хотите поддержать и ручной текст, добавьте ещё:
+Добавьте входные переменные:
 
-- `manual_text` типа `Paragraph`
+- `forwarding_pdf` -> `Single File`
+- `appeal_pdf` -> `Single File`
+- `instructions` -> `Paragraph` -> optional
 
-### 2. `HTTP Request` -> `extract_pdf`
+## 2. HTTP Request -> extract_forwarding
 
-Цель: отправить загруженный PDF в сервис и получить нормализованный текст плюс черновые реквизиты.
-
-Настройки:
-
-- Method: `POST`
-- URL: `http://docx-service:8000/extract`
-- Body: `Binary`
-- Binary variable: `pdf`
-- Headers:
+- `Method`: `POST`
+- `URL`: `http://docx-service:8000/extract`
+- если сервис доступен через host:
+  `http://host.docker.internal:8119/extract`
+- `Body`: `Binary`
+- `Binary variable`: `forwarding_pdf`
+- `Headers`:
   - `Content-Type: application/pdf`
-  - `X-Filename: appeal.pdf`
+  - `X-Filename: forwarding.pdf`
 
-Ожидаемый JSON-ответ:
+## 3. Code -> parse_forwarding_json
 
-```json
-{
-  "text": "полный текст обращения",
-  "parsed": {
-    "applicant_name": "Иванов И.И.",
-    "reference_line": "от 9 января 2025 г. № П48-5533-1",
-    "source_line1": "Письмо Аппарата Правительства",
-    "source_line2": "Российской Федерации",
-    "body_text": "черновой текст",
-    "topic": "О ...",
-    "subject_title": "О рассмотрении обращения"
-  }
-}
-```
+Входы:
 
-### 3. `LLM` -> `draft_response`
+- `body` = `extract_forwarding.body`
+- `status_code` = `extract_forwarding.status_code`
 
-Цель: на основе извлечённого текста подготовить итоговый текст ответа и уточнить реквизиты.
-
-Входные переменные для промпта:
-
-- `extract_pdf.body.text`
-- `extract_pdf.body.parsed`
-
-Рекомендуемый system prompt:
-
-```text
-Ты готовишь официальный ответ на обращение в деловом стиле государственного ведомства.
-На входе есть полный текст обращения и черновые реквизиты, извлечённые автоматически.
-
-Верни только JSON-объект без markdown и без пояснений.
-Строго верни поля:
-- applicant_name
-- subject_title
-- source_line1
-- source_line2
-- reference_line
-- body_text
-
-Требования:
-- applicant_name в формате "Фамилия И.О."
-- subject_title обычно "О рассмотрении обращения"
-- source_line1 и source_line2 короткие строки для шапки
-- reference_line в формате "от ... № ..."
-- body_text это 2-4 абзаца официального ответа на русском языке
-- не выдумывай факты, которых нет во входном тексте
-- если поле нельзя уверенно восстановить, используй значение из parsed
-```
-
-Рекомендуемый user prompt:
-
-```text
-Текст обращения:
-{{#extract_pdf.body.text#}}
-
-Черновые поля:
-{{#extract_pdf.body.parsed#}}
-```
-
-Режим ответа:
-
-- включить `Structured output` или строгий JSON, если модель это поддерживает;
-- температура `0.1-0.3`.
-
-### 4. `Code` -> `normalize_json`
-
-Цель: безопасно распарсить JSON из LLM и заполнить пропуски дефолтами из `extract_pdf.body.parsed`.
-
-Пример Python-кода:
+Код:
 
 ```python
-def main(llm_output: str, parsed: dict, original_text: str) -> dict:
+def main(body: str, status_code: int) -> dict:
     import json
 
-    data = json.loads(llm_output)
+    if status_code != 200:
+        raise Exception(f"extract_forwarding failed: {status_code}, body={body}")
 
+    data = json.loads(body)
     return {
-        "text": original_text,
-        "applicant_name": data.get("applicant_name") or parsed.get("applicant_name"),
-        "subject_title": data.get("subject_title") or parsed.get("subject_title") or "О рассмотрении обращения",
-        "source_line1": data.get("source_line1") or parsed.get("source_line1"),
-        "source_line2": data.get("source_line2") or parsed.get("source_line2"),
-        "reference_line": data.get("reference_line") or parsed.get("reference_line"),
-        "body_text": data.get("body_text") or parsed.get("body_text"),
+        "text": data.get("text", ""),
+        "parsed": data.get("parsed", {}) or {},
     }
 ```
 
-Подайте в него:
+Выходы:
 
-- `llm_output` = текстовый ответ из `draft_response`
-- `parsed` = `extract_pdf.body.parsed`
-- `original_text` = `extract_pdf.body.text`
+- `text` -> `String`
+- `parsed` -> `Object`
 
-### 5. `HTTP Request` -> `render_docx`
+## 4. HTTP Request -> extract_appeal
 
-Цель: передать в сервис итоговый текст и поля для рендера документа.
+Настройки такие же, но:
 
-Настройки:
+- `Binary variable`: `appeal_pdf`
+- `X-Filename: appeal.pdf`
 
-- Method: `POST`
-- URL: `http://docx-service:8000/generate`
-- Content-Type: `application/json`
+## 5. Code -> parse_appeal_json
 
-Body:
+Входы:
+
+- `body` = `extract_appeal.body`
+- `status_code` = `extract_appeal.status_code`
+
+Код:
+
+```python
+def main(body: str, status_code: int) -> dict:
+    import json
+
+    if status_code != 200:
+        raise Exception(f"extract_appeal failed: {status_code}, body={body}")
+
+    data = json.loads(body)
+    return {
+        "text": data.get("text", ""),
+        "parsed": data.get("parsed", {}) or {},
+    }
+```
+
+Выходы:
+
+- `text` -> `String`
+- `parsed` -> `Object`
+
+## 6. Code -> merge_inputs
+
+Этот узел собирает черновой контекст для LLM. В новой схеме приоритетны:
+
+- `recipient_block`
+- `subject_title`
+- `reference_caption`
+- `salutation`
+- `body_text`
+
+Входы:
+
+- `forwarding_text`
+- `forwarding_parsed`
+- `appeal_text`
+- `appeal_parsed`
+
+Код:
+
+```python
+def pick(*values):
+    for value in values:
+        if isinstance(value, str):
+            value = value.strip()
+        if value:
+            return value
+    return ""
+
+
+def main(
+    forwarding_text: str,
+    forwarding_parsed: dict,
+    appeal_text: str,
+    appeal_parsed: dict,
+) -> dict:
+    forwarding_parsed = forwarding_parsed or {}
+    appeal_parsed = appeal_parsed or {}
+
+    applicant_name = pick(
+        appeal_parsed.get("applicant_name"),
+        forwarding_parsed.get("applicant_name"),
+    )
+    applicant_email = pick(
+        appeal_parsed.get("applicant_email"),
+        forwarding_parsed.get("applicant_email"),
+    )
+
+    recipient_block = pick(
+        appeal_parsed.get("recipient_block"),
+        forwarding_parsed.get("recipient_block"),
+    )
+    if not recipient_block:
+        parts = [part for part in [applicant_name, applicant_email] if part]
+        recipient_block = "\n".join(parts)
+
+    merged_parsed = {
+        "applicant_name": applicant_name,
+        "applicant_email": applicant_email,
+        "recipient_block": recipient_block,
+        "subject_title": pick(
+            appeal_parsed.get("subject_title"),
+            forwarding_parsed.get("subject_title"),
+            "О рассмотрении обращения гражданина",
+        ),
+        "reference_caption": pick(
+            forwarding_parsed.get("reference_caption"),
+            appeal_parsed.get("reference_caption"),
+            "На обращение гражданина",
+        ),
+        "salutation": pick(
+            appeal_parsed.get("salutation"),
+            forwarding_parsed.get("salutation"),
+            "Уважаемый заявитель!",
+        ),
+        "body_text": pick(
+            appeal_parsed.get("body_text"),
+            forwarding_parsed.get("body_text"),
+        ),
+        "topic": pick(
+            appeal_parsed.get("topic"),
+            forwarding_parsed.get("topic"),
+        ),
+    }
+
+    forwarding_text = (forwarding_text or "").strip()
+    appeal_text = (appeal_text or "").strip()
+    combined_text = "\n\n".join(part for part in [forwarding_text, appeal_text] if part).strip()
+    knowledge_query = "\n".join(
+        part
+        for part in [
+            merged_parsed.get("topic", ""),
+            appeal_text,
+            forwarding_text,
+        ]
+        if part
+    ).strip()
+
+    return {
+        "forwarding_text": forwarding_text,
+        "appeal_text": appeal_text,
+        "combined_text": combined_text,
+        "knowledge_query": knowledge_query,
+        "merged_parsed": merged_parsed,
+    }
+```
+
+Выходы:
+
+- `forwarding_text` -> `String`
+- `appeal_text` -> `String`
+- `combined_text` -> `String`
+- `knowledge_query` -> `String`
+- `merged_parsed` -> `Object`
+
+## 7. Knowledge Retrieval -> retrieve_context
+
+- `Query`: `merge_inputs.knowledge_query`
+- Используйте базу знаний со стилевым каноном и Указом № 309
+- `top_k`: 4-6
+
+## 8. LLM -> draft_response
+
+Используйте шаблон из:
+
+- [dify-prompt-template.md](/mnt/c/Users/Admin/Desktop/Опять работа/docx-service/docx-service/docs/dify-prompt-template.md)
+
+Во входы prompt подайте:
+
+- `merge_inputs.forwarding_text`
+- `merge_inputs.appeal_text`
+- `merge_inputs.merged_parsed`
+- `retrieve_context.result`
+- `instructions`
+
+Включите `Structured Output`.
+
+## 9. Code -> normalize_json
+
+Входы:
+
+- `llm_output`
+- `parsed`
+- `original_text`
+
+Привязки:
+
+- `llm_output` = structured output LLM-узла или его текстовый output
+- `parsed` = `merge_inputs.merged_parsed`
+- `original_text` = `merge_inputs.appeal_text`
+
+Код:
+
+```python
+def main(llm_output, parsed: dict, original_text: str) -> dict:
+    import json
+
+    data = {}
+
+    if isinstance(llm_output, dict):
+        data = llm_output
+    elif isinstance(llm_output, str):
+        raw = llm_output.strip()
+
+        if raw.startswith("```json"):
+            raw = raw[7:]
+        elif raw.startswith("```"):
+            raw = raw[3:]
+        if raw.endswith("```"):
+            raw = raw[:-3]
+
+        raw = raw.strip()
+        if raw:
+            try:
+                data = json.loads(raw)
+            except Exception:
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    data = json.loads(raw[start:end + 1])
+
+    parsed = parsed or {}
+
+    return {
+        "text": original_text or "",
+        "applicant_name": data.get("applicant_name") or parsed.get("applicant_name", ""),
+        "recipient_block": data.get("recipient_block") or parsed.get("recipient_block", ""),
+        "subject_title": data.get("subject_title") or parsed.get("subject_title", "") or "О рассмотрении обращения гражданина",
+        "reference_caption": data.get("reference_caption") or parsed.get("reference_caption", "") or "На обращение гражданина",
+        "salutation": data.get("salutation") or parsed.get("salutation", "") or "Уважаемый заявитель!",
+        "body_text": data.get("body_text") or parsed.get("body_text", ""),
+    }
+```
+
+Выходы:
+
+- `text` -> `String`
+- `applicant_name` -> `String`
+- `recipient_block` -> `String`
+- `subject_title` -> `String`
+- `reference_caption` -> `String`
+- `salutation` -> `String`
+- `body_text` -> `String`
+
+## 10. HTTP Request -> render_docx
+
+- `Method`: `POST`
+- `URL`: `http://docx-service:8000/generate`
+- если через host:
+  `http://host.docker.internal:8119/generate`
+- `Body`: `JSON`
+- `Headers`:
+  - `Content-Type: application/json`
+
+JSON body:
 
 ```json
 {
-  "text": "{{#normalize_json.text#}}",
-  "applicant_name": "{{#normalize_json.applicant_name#}}",
-  "subject_title": "{{#normalize_json.subject_title#}}",
-  "source_line1": "{{#normalize_json.source_line1#}}",
-  "source_line2": "{{#normalize_json.source_line2#}}",
-  "reference_line": "{{#normalize_json.reference_line#}}",
-  "body_text": "{{#normalize_json.body_text#}}"
+  "text": "{{normalize_json.text}}",
+  "applicant_name": "{{normalize_json.applicant_name}}",
+  "recipient_block": "{{normalize_json.recipient_block}}",
+  "subject_title": "{{normalize_json.subject_title}}",
+  "reference_caption": "{{normalize_json.reference_caption}}",
+  "salutation": "{{normalize_json.salutation}}",
+  "body_text": "{{normalize_json.body_text}}"
 }
 ```
 
-Этот запрос возвращает бинарный `docx`.
+Используйте выход `files`, а не `body`.
 
-### 6. `Answer`
+## 11. Answer
 
-В ответе пользователю выведите:
+- текст: `Файл подготовлен.`
+- файл: `render_docx.files`
 
-- короткий текст, например `Документ подготовлен.`
-- файл из узла `render_docx`
-
-Если в вашем инстансе Dify удобнее работать через API workflow, а не через чат, вместо `Answer` используйте выход workflow и верните файл клиенту на своей стороне.
-
-## Почему именно так
-
-- `extract` вынесен в отдельный HTTP-вызов, чтобы поддерживать и обычные PDF, и сканированные PDF через OCR внутри сервиса.
-- `LLM` отвечает только за смысловую часть: выделение реквизитов и генерацию текста ответа.
-- `generate` отвечает только за форматирование и сборку `docx` по шаблону.
-- Такая схема проще отлаживается: видно отдельно текст после OCR, отдельно JSON после LLM, отдельно итоговый файл.
-
-## Упрощённый вариант
-
-Если PDF всегда текстовый, можно вместо узла `HTTP Request` `extract_pdf` использовать узел `Doc Extractor`, а дальше оставить ту же цепочку:
-
-1. `Start`
-2. `Doc Extractor`
-3. `LLM`
-4. `Code`
-5. `HTTP Request`
-6. `Answer`
-
-Но для сканов рекомендован именно endpoint `/extract`.
+Если в конкретной версии Dify `Answer` не принимает сразу `Array[File]`, возьмите первый элемент массива через отдельный узел или picker.

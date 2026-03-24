@@ -7,6 +7,8 @@ from .models import (
     DEFAULT_EXECUTOR_NAME,
     DEFAULT_EXECUTOR_PHONE,
     DEFAULT_REFERENCE_LINE,
+    DEFAULT_REFERENCE_CAPTION,
+    DEFAULT_SALUTATION,
     DEFAULT_SIGNER_NAME,
     DEFAULT_SOURCE_LINE_1,
     DEFAULT_SOURCE_LINE_2,
@@ -46,29 +48,39 @@ META_LINE_PATTERNS = (
     "исп.",
     "доб.",
 )
+EMAIL_RE = re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b")
 
 
 def parse_letter_data(text: str, overrides: LetterOverrides) -> LetterData:
     normalized = normalize_text(text)
     lines = [line for line in normalized.splitlines() if line]
 
-    applicant_display = normalize_applicant_name(overrides.applicant_name) or extract_applicant_name(lines)
+    full_applicant_name = normalize_full_name(overrides.applicant_name) or extract_full_applicant_name(lines)
+    applicant_display = normalize_applicant_name(full_applicant_name) or extract_applicant_name(lines)
+    applicant_email = extract_email(normalized)
     subject_title = overrides.subject_title or DEFAULT_SUBJECT_TITLE
     reference_line = overrides.reference_line or extract_reference_line(normalized, lines) or DEFAULT_REFERENCE_LINE
+    reference_caption = overrides.reference_caption or build_reference_caption(reference_line)
 
     source_line1, source_line2 = resolve_source_lines(lines, overrides, reference_line)
     topic = extract_topic(lines)
     body_paragraphs = resolve_body_paragraphs(normalized, lines, overrides, topic)
+    recipient_block = overrides.recipient_block or build_recipient_block(applicant_display, applicant_email)
+    salutation = overrides.salutation or build_salutation(full_applicant_name, applicant_display)
 
     executor_department = overrides.executor_department or DEFAULT_EXECUTOR_DEPARTMENT
     dept_line1, dept_line2 = split_text_to_two_lines(executor_department, max_line_length=38)
 
     return LetterData(
         applicant_display=applicant_display or "заявителя",
+        applicant_email=applicant_email,
+        recipient_block=recipient_block,
         subject_title=subject_title,
         source_line1=source_line1,
         source_line2=source_line2,
         reference_line=reference_line,
+        reference_caption=reference_caption,
+        salutation=salutation,
         body_paragraphs=body_paragraphs,
         signer_name=overrides.signer_name or DEFAULT_SIGNER_NAME,
         executor_name=overrides.executor_name or DEFAULT_EXECUTOR_NAME,
@@ -92,6 +104,12 @@ def normalize_applicant_name(name: str | None) -> str | None:
     return to_brief_name(" ".join(name.split()))
 
 
+def normalize_full_name(name: str | None) -> str | None:
+    if not name:
+        return None
+    return " ".join(name.split())
+
+
 def extract_reference_line(text: str, lines: list[str]) -> str | None:
     for line in lines:
         match = REFERENCE_RE.search(line)
@@ -107,6 +125,12 @@ def extract_reference_line(text: str, lines: list[str]) -> str | None:
 def cleanup_reference_line(value: str) -> str:
     normalized = " ".join(value.replace("№ №", "№").replace("№№", "№").split())
     return normalized.strip(" .")
+
+
+def build_reference_caption(reference_line: str | None) -> str:
+    if not reference_line or reference_line == DEFAULT_REFERENCE_LINE:
+        return DEFAULT_REFERENCE_CAPTION
+    return f"На обращение гражданина {reference_line}"
 
 
 def resolve_source_lines(
@@ -175,7 +199,42 @@ def extract_applicant_name(lines: list[str]) -> str | None:
     return None
 
 
+def extract_full_applicant_name(lines: list[str]) -> str | None:
+    for line in lines:
+        for pattern in LABELLED_NAME_RE:
+            match = pattern.search(line)
+            if not match:
+                continue
+            candidate = cleanup_person_name_candidate(match.group(1))
+            if candidate:
+                return candidate
+
+    for line in reversed(lines):
+        full_match = FULL_NAME_RE.search(line)
+        if full_match:
+            candidate = cleanup_person_name_candidate(full_match.group(1))
+            if candidate and len(candidate.split()) >= 3:
+                return candidate
+
+    return None
+
+
+def extract_email(text: str) -> str | None:
+    match = EMAIL_RE.search(text)
+    if not match:
+        return None
+    return match.group(0)
+
+
 def cleanup_name_candidate(value: str) -> str | None:
+    candidate = cleanup_person_name_candidate(value)
+    if not candidate:
+        return None
+
+    return to_brief_name(candidate)
+
+
+def cleanup_person_name_candidate(value: str) -> str | None:
     candidate = " ".join(value.replace(",", " ").split()).strip()
     if not candidate:
         return None
@@ -183,7 +242,7 @@ def cleanup_name_candidate(value: str) -> str | None:
     tokens = [token.strip(".").lower() for token in candidate.split()]
     if any(token in ORG_STOPWORDS for token in tokens):
         return None
-    return to_brief_name(candidate)
+    return candidate
 
 
 def to_brief_name(name: str) -> str:
@@ -197,6 +256,37 @@ def to_brief_name(name: str) -> str:
     if len(parts) == 2:
         return f"{parts[0]} {parts[1][0]}."
     return name
+
+
+def build_recipient_block(applicant_display: str | None, applicant_email: str | None) -> str:
+    parts = []
+    if applicant_display:
+        parts.append(applicant_display)
+    if applicant_email:
+        parts.append(applicant_email)
+    return "\n".join(parts) if parts else "заявителю"
+
+
+def build_salutation(full_name: str | None, applicant_display: str | None) -> str:
+    if full_name:
+        parts = full_name.split()
+        if len(parts) >= 3:
+            title = " ".join(parts[1:3])
+            prefix = "Уважаемая" if looks_feminine_name(parts[2]) else "Уважаемый"
+            return f"{prefix} {title}!"
+        if len(parts) == 2 and all(len(part) > 1 for part in parts):
+            prefix = "Уважаемая" if looks_feminine_name(parts[-1]) else "Уважаемый"
+            return f"{prefix} {' '.join(parts)}!"
+
+    if applicant_display and len(applicant_display.split()) == 1:
+        return f"Уважаемый {applicant_display}!"
+
+    return DEFAULT_SALUTATION
+
+
+def looks_feminine_name(name_part: str) -> bool:
+    lower = name_part.strip(".").lower()
+    return lower.endswith("на") or lower.endswith("вна")
 
 
 def extract_topic(lines: list[str]) -> str | None:
@@ -232,18 +322,29 @@ def resolve_body_paragraphs(
 
     excerpt = build_excerpt(text, lines)
 
-    first = "Минэкономразвития России рассмотрело поступившее обращение."
+    first = "Минэкономразвития России рассмотрело Ваше обращение и в пределах компетенции сообщает."
     if topic:
-        first = f'Минэкономразвития России рассмотрело поступившее обращение по теме "{topic.strip(" .")}".'
+        first = (
+            f"Минэкономразвития России рассмотрело Ваше обращение по вопросу "
+            f"{topic.strip(' .')} и в пределах компетенции сообщает."
+        )
 
-    second = (
-        "Сообщаем, что изложенные в обращении доводы и предложения приняты к сведению "
-        "и будут рассмотрены в пределах компетенции Министерства."
-    )
-
-    paragraphs = [first, second]
+    paragraphs = [first]
     if excerpt:
-        paragraphs.append(f"В обращении, в частности, затронуты следующие вопросы: {excerpt}.")
+        paragraphs.append(f"В обращении затронуты следующие вопросы: {excerpt}.")
+    else:
+        paragraphs.append(
+            "Изложенные в обращении доводы и предложения приняты к сведению "
+            "и будут учитываться при подготовке материалов по вопросам, "
+            "относящимся к компетенции Министерства."
+        )
+
+    paragraphs.append(
+        "Учитывая изложенное, сообщаем, что предложения и замечания, "
+        "относящиеся к компетенции Минэкономразвития России, "
+        "могут быть использованы при реализации мероприятий "
+        "в сфере социально-экономического развития."
+    )
     return paragraphs
 
 

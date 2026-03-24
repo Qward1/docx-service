@@ -5,5 +5,5 @@ services:
       dockerfile: Dockerfile
     container_name: docx-service
     ports:
-      - "8000:8000"
+      - "8119:8000"
     restart: unless-stopped

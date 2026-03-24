@@ -41,6 +41,7 @@ def render_docx(template_path: Path, data: LetterData) -> bytes:
     )
     replace_signature_department(root, data)
     replace_body_paragraphs(root, data.body_paragraphs)
+    tighten_trailing_layout(root)
     turn_red_text_black(root)
 
     archive_map[DOCUMENT_XML_PATH] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
@@ -144,15 +145,118 @@ def rewrite_paragraph(paragraph: ET.Element, text: str) -> None:
 
 def replace_signature_department(root: ET.Element, data: LetterData) -> None:
     paragraphs = root.findall(".//w:p", NS)
+    department = " ".join(
+        part for part in [data.executor_department_line1, data.executor_department_line2] if part
+    ).strip()
+    signature_line1, signature_line2 = build_signature_department_lines(department)
+
     for index, paragraph in enumerate(paragraphs):
         text = paragraph_text(paragraph)
         if text == "Директор Департамента бюджетного планирования, государственных программ":
-            rewrite_paragraph(paragraph, f"Директор {data.executor_department_line1}")
+            rewrite_paragraph(paragraph, signature_line1)
             if index + 1 < len(paragraphs):
                 next_paragraph = paragraphs[index + 1]
                 next_text = paragraph_text(next_paragraph)
                 if next_text == "и национальных проектовТ.С. Митюков":
-                    rewrite_paragraph(next_paragraph, f"{data.executor_department_line2}\t{data.signer_name}")
+                    rewrite_paragraph(next_paragraph, f"{signature_line2}\t{data.signer_name}")
+
+
+def build_signature_department_lines(department: str) -> tuple[str, str]:
+    normalized = " ".join(department.split())
+    if not normalized:
+        return "Директор Департамента", ""
+
+    signature_department = to_signature_department_case(normalized)
+    if signature_department.endswith(" и национальных проектов"):
+        first_part = signature_department[: -len(" и национальных проектов")].rstrip()
+        first_part = first_part.replace(", государственных программ", ",\nгосударственных программ", 1)
+        return f"Директор {first_part}", "и национальных проектов"
+
+    return f"Директор {signature_department}", ""
+
+
+def to_signature_department_case(text: str) -> str:
+    replacements = (
+        ("Департамент ", "Департамента "),
+        ("Управление ", "Управления "),
+        ("Отдел ", "Отдела "),
+        ("Служба ", "Службы "),
+    )
+    for source, target in replacements:
+        if text.startswith(source):
+            return target + text[len(source) :]
+    return text
+
+
+def tighten_trailing_layout(root: ET.Element) -> None:
+    body = root.find(".//w:body", NS)
+    if body is None:
+        return
+
+    children = list(body)
+    signature_start = find_paragraph_index(children, lambda text: text.startswith("Директор "))
+    executor_start = find_paragraph_index(children, lambda text: text.startswith("Исп. "))
+    if signature_start is None or executor_start is None:
+        return
+
+    previous_content = find_previous_nonempty_paragraph(children, signature_start)
+    if previous_content is not None:
+        collapse_empty_paragraphs(body, children, previous_content + 1, signature_start, keep=1)
+        children = list(body)
+        signature_start = find_paragraph_index(children, lambda text: text.startswith("Директор "))
+        executor_start = find_paragraph_index(children, lambda text: text.startswith("Исп. "))
+        if signature_start is None or executor_start is None:
+            return
+
+    collapse_empty_paragraphs(body, children, signature_start + 2, executor_start, keep=1)
+
+
+def collapse_empty_paragraphs(
+    body: ET.Element,
+    children: list[ET.Element],
+    start_index: int,
+    end_index: int,
+    keep: int,
+) -> None:
+    empty_indexes = [
+        index
+        for index in range(start_index, end_index)
+        if is_plain_empty_paragraph(children[index])
+    ]
+    if len(empty_indexes) <= keep:
+        return
+
+    for index in reversed(empty_indexes[:-keep]):
+        body.remove(children[index])
+
+
+def is_plain_empty_paragraph(node: ET.Element) -> bool:
+    if node.tag != w_tag("p"):
+        return False
+    if paragraph_text(node):
+        return False
+    if node.find(".//w:drawing", NS) is not None:
+        return False
+    return True
+
+
+def find_paragraph_index(children: list[ET.Element], predicate) -> int | None:
+    for index, node in enumerate(children):
+        if node.tag != w_tag("p"):
+            continue
+        if predicate(paragraph_text(node)):
+            return index
+    return None
+
+
+def find_previous_nonempty_paragraph(children: list[ET.Element], before_index: int) -> int | None:
+    for index in range(before_index - 1, -1, -1):
+        node = children[index]
+        if node.tag != w_tag("p"):
+            continue
+        if paragraph_text(node):
+            return index
+    return None
 
 
 def turn_red_text_black(root: ET.Element) -> None:

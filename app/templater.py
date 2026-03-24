@@ -27,13 +27,10 @@ def render_docx(template_path: Path, data: LetterData) -> bytes:
 
     root = ET.fromstring(archive_map[DOCUMENT_XML_PATH])
 
+    replace_special_paragraphs(root, data)
     replace_paragraph_texts(
         root,
         {
-            "{{RECIPIENT_BLOCK}}": data.recipient_block,
-            "{{SUBJECT_TITLE}}": data.subject_title,
-            "{{REFERENCE_CAPTION}}": data.reference_caption,
-            "{{SALUTATION}}": data.salutation,
             "Т.С. Митюков": data.signer_name,
             "Исп. Шишкин Е.Н.": f"Исп. {data.executor_name}",
             "8 (495) 870-29-21 доб. 18569": data.executor_phone,
@@ -58,6 +55,19 @@ def replace_paragraph_texts(root: ET.Element, replacements: dict[str, str]) -> N
         current = paragraph_text(paragraph)
         if current in replacements:
             rewrite_paragraph(paragraph, replacements[current])
+
+
+def replace_special_paragraphs(root: ET.Element, data: LetterData) -> None:
+    for paragraph in root.findall(".//w:p", NS):
+        current = paragraph_text(paragraph)
+        if current == "{{RECIPIENT_BLOCK}}":
+            rewrite_recipient_paragraph(paragraph, data.recipient_block)
+        elif current == "{{SUBJECT_TITLE}}":
+            rewrite_subject_title_paragraph(paragraph, data.subject_title)
+        elif current == "{{REFERENCE_CAPTION}}":
+            rewrite_reference_caption_paragraph(paragraph, data.reference_caption)
+        elif current == "{{SALUTATION}}":
+            rewrite_paragraph(paragraph, data.salutation)
 
 
 def replace_body_paragraphs(root: ET.Element, paragraphs: list[str]) -> None:
@@ -103,24 +113,8 @@ def build_paragraph(template: ET.Element, text: str) -> ET.Element:
 
 
 def rewrite_paragraph(paragraph: ET.Element, text: str) -> None:
-    first_run = paragraph.find("w:r", NS)
-    run_props = None
-    if first_run is not None:
-        original_rpr = first_run.find("w:rPr", NS)
-        if original_rpr is not None:
-            run_props = copy.deepcopy(original_rpr)
-
-    preserved_children = []
-    for child in paragraph:
-        if child.tag == w_tag("pPr"):
-            continue
-        if child.find(".//w:drawing", NS) is not None:
-            preserved_children.append(copy.deepcopy(child))
-
-    for child in list(paragraph):
-        if child.tag != w_tag("pPr"):
-            paragraph.remove(child)
-
+    run_props, preserved_children = prepare_paragraph(paragraph)
+    clear_paragraph(paragraph)
     for child in preserved_children:
         paragraph.append(child)
 
@@ -141,6 +135,52 @@ def rewrite_paragraph(paragraph: ET.Element, text: str) -> None:
 
     if not wrote_content:
         paragraph.append(build_text_run(run_props, ""))
+
+
+def rewrite_recipient_paragraph(paragraph: ET.Element, recipient_block: str) -> None:
+    run_props, _ = prepare_paragraph(paragraph)
+    clear_paragraph(paragraph)
+
+    lines = [line.strip() for line in recipient_block.splitlines() if line.strip()]
+    if not lines:
+        paragraph.append(build_text_run(run_props, ""))
+        return
+
+    paragraph.append(build_control_run(run_props, "br", {"type": "column"}))
+    paragraph.append(build_text_run(run_props, f"{lines[0]} "))
+    if len(lines) > 1:
+        paragraph.append(build_text_run(run_props, lines[1]))
+
+
+def rewrite_subject_title_paragraph(paragraph: ET.Element, subject_title: str) -> None:
+    run_props, _ = prepare_paragraph(paragraph)
+    clear_paragraph(paragraph)
+
+    words = subject_title.split()
+    if len(words) >= 3:
+        append_text_and_tab(paragraph, run_props, words[0])
+        append_text_and_tab(paragraph, run_props, words[1])
+        paragraph.append(build_text_run(run_props, " ".join(words[2:])))
+        return
+
+    rewrite_paragraph(paragraph, subject_title)
+
+
+def rewrite_reference_caption_paragraph(paragraph: ET.Element, reference_caption: str) -> None:
+    run_props, _ = prepare_paragraph(paragraph)
+    clear_paragraph(paragraph)
+
+    prefix = "На обращение гражданина "
+    if reference_caption.startswith(prefix):
+        tail = reference_caption[len(prefix) :].strip()
+        append_text_and_tab(paragraph, run_props, "На")
+        append_text_and_tab(paragraph, run_props, "обращение")
+        paragraph.append(build_text_run(run_props, "гражданина "))
+        if tail:
+            paragraph.append(build_text_run(run_props, tail))
+        return
+
+    rewrite_paragraph(paragraph, reference_caption)
 
 
 def replace_signature_department(root: ET.Element, data: LetterData) -> None:
@@ -274,6 +314,29 @@ def needs_preserve_space(text: str) -> bool:
     return text.startswith(" ") or text.endswith(" ") or "  " in text
 
 
+def prepare_paragraph(paragraph: ET.Element) -> tuple[ET.Element | None, list[ET.Element]]:
+    first_run = paragraph.find("w:r", NS)
+    run_props = None
+    if first_run is not None:
+        original_rpr = first_run.find("w:rPr", NS)
+        if original_rpr is not None:
+            run_props = copy.deepcopy(original_rpr)
+
+    preserved_children = []
+    for child in paragraph:
+        if child.tag == w_tag("pPr"):
+            continue
+        if child.find(".//w:drawing", NS) is not None:
+            preserved_children.append(copy.deepcopy(child))
+    return run_props, preserved_children
+
+
+def clear_paragraph(paragraph: ET.Element) -> None:
+    for child in list(paragraph):
+        if child.tag != w_tag("pPr"):
+            paragraph.remove(child)
+
+
 def build_text_run(run_props: ET.Element | None, text: str) -> ET.Element:
     run = ET.Element(w_tag("r"))
     if run_props is not None:
@@ -285,11 +348,23 @@ def build_text_run(run_props: ET.Element | None, text: str) -> ET.Element:
     return run
 
 
-def build_control_run(run_props: ET.Element | None, control: str) -> ET.Element:
+def append_text_and_tab(paragraph: ET.Element, run_props: ET.Element | None, text: str) -> None:
+    paragraph.append(build_text_run(run_props, text))
+    paragraph.append(build_control_run(run_props, "tab"))
+
+
+def build_control_run(
+    run_props: ET.Element | None,
+    control: str,
+    attributes: dict[str, str] | None = None,
+) -> ET.Element:
     run = ET.Element(w_tag("r"))
     if run_props is not None:
         run.append(copy.deepcopy(run_props))
-    ET.SubElement(run, w_tag(control))
+    node = ET.SubElement(run, w_tag(control))
+    if attributes:
+        for key, value in attributes.items():
+            node.set(w_tag(key), value)
     return run
 
 
